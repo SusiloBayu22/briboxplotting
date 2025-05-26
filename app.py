@@ -29,12 +29,15 @@ def load_data(file):
 def init_session_state():
     defaults = {
         "kcp_custom_colors": {},
-        "circle_radius": 1.0,
-        "show_circle": False,
-        "shape_color": "red",
-        "shape_target_color": "green",
         "enable_cluster": False
     }
+    for i in range(1, 4):
+        defaults.update({
+            f"radius_{i}_enabled": False,
+            f"radius_{i}_distance": 1.0,
+            f"radius_{i}_color": "red",
+            f"radius_{i}_target": "blue"
+        })
     for key, val in defaults.items():
         if key not in st.session_state:
             st.session_state[key] = val
@@ -69,11 +72,12 @@ if uploaded_json is not None:
         progress = json.load(uploaded_json)
         df = pd.DataFrame(progress["data"])
         st.session_state.kcp_custom_colors = progress.get("kcp_custom_colors", {})
-        st.session_state.circle_radius = progress.get("circle_radius", 1.0)
-        st.session_state.show_circle = progress.get("show_circle", False)
-        st.session_state.shape_color = progress.get("shape_color", "red")
-        st.session_state.shape_target_color = progress.get("shape_target_color", "green")
         st.session_state.enable_cluster = progress.get("enable_cluster", False)
+        for i in range(1, 4):
+            st.session_state[f"radius_{i}_enabled"] = progress.get(f"radius_{i}_enabled", False)
+            st.session_state[f"radius_{i}_distance"] = progress.get(f"radius_{i}_distance", 1.0)
+            st.session_state[f"radius_{i}_color"] = progress.get(f"radius_{i}_color", "red")
+            st.session_state[f"radius_{i}_target"] = progress.get(f"radius_{i}_target", "blue")
         st.session_state.saved_df = df
         st.success("Data dan pengaturan berhasil dimuat dari JSON.")
 
@@ -99,11 +103,10 @@ if uploaded_file is not None:
     filtered_df = df.copy()
     filter_hierarchy = ["Zona", "Nama Provinsi", "Nama Kab/Kota", "Nama KC Induk"]
 
-    for i, col in enumerate(filter_hierarchy):
+    for col in filter_hierarchy:
         if col in filtered_df.columns:
             unique_vals = sorted(filtered_df[col].dropna().unique())
-            pilihan_label = f"Pilih {col}"
-            multiselect_vals = st.sidebar.multiselect(pilihan_label, ["Pilih Semua"] + unique_vals, default=["Pilih Semua"])
+            multiselect_vals = st.sidebar.multiselect(f"Pilih {col}", ["Pilih Semua"] + unique_vals, default=["Pilih Semua"])
             if "Pilih Semua" not in multiselect_vals:
                 filtered_df = filtered_df[filtered_df[col].isin(multiselect_vals)]
 
@@ -127,12 +130,16 @@ if uploaded_file is not None:
     if st.sidebar.button("Reset Semua Warna"):
         st.session_state.kcp_custom_colors = {}
 
-    # === Sidebar Circle Settings ===
+    # === Radius Bertingkat (3 Tingkat) ===
     st.sidebar.markdown("---")
-    st.session_state.show_circle = st.sidebar.checkbox("Tampilkan Lingkaran Radius", value=st.session_state.show_circle)
-    st.session_state.circle_radius = st.sidebar.number_input("Masukkan Radius (km)", min_value=0.0, value=st.session_state.circle_radius, step=0.5)
-    st.session_state.shape_color = st.sidebar.selectbox("Warna Lingkaran", available_folium_colors, index=available_folium_colors.index(st.session_state.shape_color))
-    st.session_state.shape_target_color = st.sidebar.selectbox("Warna Target Titik", available_folium_colors, index=available_folium_colors.index(st.session_state.shape_target_color))
+    st.sidebar.subheader("Radius Bertingkat (Maks. 3 Lingkaran)")
+    for i in range(1, 4):
+        with st.sidebar.expander(f"Radius #{i}", expanded=(i == 1)):
+            enabled = st.checkbox(f"Aktifkan Radius #{i}", key=f"radius_{i}_enabled")
+            if enabled:
+                st.number_input(f"Jarak Radius #{i} (km)", min_value=0.0, step=0.5, key=f"radius_{i}_distance")
+                st.selectbox(f"Warna Lingkaran #{i}", available_folium_colors, key=f"radius_{i}_color")
+                st.selectbox(f"Warna Target Titik #{i}", available_folium_colors, key=f"radius_{i}_target")
 
     st.sidebar.markdown("---")
     st.session_state.enable_cluster = st.sidebar.checkbox("Aktifkan Cluster Marker", value=st.session_state.enable_cluster)
@@ -142,23 +149,21 @@ if uploaded_file is not None:
     progress = {
         "data": df.to_dict(orient="records"),
         "kcp_custom_colors": st.session_state.kcp_custom_colors,
-        "circle_radius": st.session_state.circle_radius,
-        "show_circle": st.session_state.show_circle,
-        "shape_color": st.session_state.shape_color,
-        "shape_target_color": st.session_state.shape_target_color,
-        "enable_cluster": st.session_state.enable_cluster
+        "enable_cluster": st.session_state.enable_cluster,
     }
+    for i in range(1, 4):
+        progress.update({
+            f"radius_{i}_enabled": st.session_state.get(f"radius_{i}_enabled", False),
+            f"radius_{i}_distance": st.session_state.get(f"radius_{i}_distance", 1.0),
+            f"radius_{i}_color": st.session_state.get(f"radius_{i}_color", "red"),
+            f"radius_{i}_target": st.session_state.get(f"radius_{i}_target", "blue"),
+        })
     json_bytes = json.dumps(progress, default=serialize_time).encode("utf-8")
-    st.sidebar.download_button(
-        label="Simpan Progress (JSON)",
-        data=json_bytes,
-        file_name="saved_progress.json",
-        mime="application/json"
-    )
+    st.sidebar.download_button("Simpan Progress (JSON)", data=json_bytes, file_name="saved_progress.json", mime="application/json")
 
     # === Main Map ===
-    lat_center = filtered_df["Latitude"].mean() if not filtered_df["Latitude"].isna().all() else 0.0
-    lon_center = filtered_df["Longitude"].mean() if not filtered_df["Longitude"].isna().all() else 0.0
+    lat_center = filtered_df["Latitude"].mean()
+    lon_center = filtered_df["Longitude"].mean()
     m = folium.Map(location=[lat_center, lon_center], zoom_start=6)
     plugins.Draw(export=True).add_to(m)
 
@@ -185,66 +190,44 @@ if uploaded_file is not None:
         else:
             marker.add_to(marker_group)
 
-        if warna == st.session_state.shape_target_color and st.session_state.show_circle:
-            folium.Circle(
-                radius=st.session_state.circle_radius * 1000,
-                location=[lat, lon],
-                color=st.session_state.shape_color,
-                fill=True,
-                fill_opacity=0.2
-            ).add_to(m)
+        # Tambahkan Lingkaran Bertingkat
+        for i in range(1, 4):
+            if st.session_state.get(f"radius_{i}_enabled"):
+                target = st.session_state.get(f"radius_{i}_target")
+                if warna == target:
+                    radius_km = st.session_state.get(f"radius_{i}_distance", 1.0)
+                    circle_color = st.session_state.get(f"radius_{i}_color", "red")
+                    folium.Circle(
+                        radius=radius_km * 1000,
+                        location=[lat, lon],
+                        color=circle_color,
+                        fill=True,
+                        fill_opacity=0.2
+                    ).add_to(m)
 
     if st.session_state.enable_cluster:
         marker_cluster.add_to(m)
     else:
         marker_group.add_to(m)
 
-    # === Tambahkan Legenda Peta ===
+    # === Legenda Peta ===
     legend_colors = {
-        "RO": "purple",
-        "AIW": "beige",
-        "KK": "green",
-        "E-buzz": "orange",
-        "KCP": "pink",
-        "Unit": "red",
-        "KC": "blue",
-        "teras": "gray",
-        "kantor pusat": "white",
-        "KF": "lightblue",
-        "ssb": "cadetblue"
+        "RO": "purple", "AIW": "beige", "KK": "green", "E-buzz": "orange",
+        "KCP": "pink", "Unit": "red", "KC": "blue", "teras": "gray",
+        "kantor pusat": "white", "KF": "lightblue", "ssb": "cadetblue"
     }
-
-    legend_items = ""
-    for label, color in legend_colors.items():
-        border = "border: 1px solid #ccc;" if color == "white" else ""
-        legend_items += f"""
-        <div style="display: flex; align-items: center; margin-bottom: 4px;">
-            <div style="width: 12px; height: 12px; border-radius: 50%; background: {color}; {border} margin-right: 6px;"></div> {label}
-        </div>
-        """
-
-        legend_html = f"""
-    <div style="
-        position: absolute;
-        bottom: 10px;
-        right: 10px;
-        z-index: 9999;
-        background-color: white;
-        padding: 10px;
-        border: 2px solid #ccc;
-        border-radius: 8px;
-        box-shadow: 2px 2px 5px rgba(0,0,0,0.3);
-        font-size: 14px;
-        max-width: 160px;
-    ">
-    <b>Legenda:</b><br>
-    <div style="margin-top: 5px;">
-      {legend_items}
-    </div>
+    legend_items = "".join([
+        f"<div style='display: flex; align-items: center; margin-bottom: 4px;'>"
+        f"<div style='width: 12px; height: 12px; border-radius: 50%; background: {c}; {'border:1px solid #ccc;' if c == 'white' else ''} margin-right: 6px;'></div> {l}</div>"
+        for l, c in legend_colors.items()
+    ])
+    legend_html = f"""
+    <div style="position: absolute; bottom: 10px; right: 10px; z-index: 9999; background-color: white;
+        padding: 10px; border: 2px solid #ccc; border-radius: 8px; box-shadow: 2px 2px 5px rgba(0,0,0,0.3);
+        font-size: 14px; max-width: 160px;">
+        <b>Legenda:</b><br><div style="margin-top: 5px;">{legend_items}</div>
     </div>
     """
-
-
     m.get_root().html.add_child(folium.Element(legend_html))
 
     st_data = st_folium(m, use_container_width=True, height=700)
@@ -263,12 +246,7 @@ if uploaded_file is not None:
     buffer = BytesIO()
     df_export.to_excel(buffer, index=False, engine='openpyxl')
     buffer.seek(0)
-    st.download_button(
-        label="Download Seluruh Data (Excel)",
-        data=buffer,
-        file_name="seluruh_data_dengan_warna.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
+    st.download_button("Download Seluruh Data (Excel)", data=buffer, file_name="seluruh_data_dengan_warna.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 else:
     st.info("Silakan upload file Excel untuk memulai.")
@@ -276,4 +254,3 @@ else:
         df = st.session_state.saved_df
         st.success("Menampilkan data yang dimuat dari JSON sebelumnya.")
         st.write(df.head())
-
