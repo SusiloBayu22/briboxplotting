@@ -213,8 +213,8 @@ if uploaded_file is not None:
     # === Legenda Peta ===
     legend_colors = {
         "RO": "purple", "AIW": "beige", "KK": "green", "E-buzz": "orange",
-        "KCP": "pink", "Unit": "red", "KC": "blue", "teras": "gray",
-        "kantor pusat": "white", "KF": "lightblue", "ssb": "cadetblue"
+        "KCP": "pink", "Unit": "red", "KC": "blue", "Teras": "gray",
+        "Kantor Pusat": "white", "KF": "lightblue", "SSB": "cadetblue"
     }
     legend_items = "".join([
         f"<div style='display: flex; align-items: center; margin-bottom: 4px;'>"
