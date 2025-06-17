@@ -101,7 +101,7 @@ if uploaded_file is not None:
     # === Sidebar Filters - Cascading ===
     st.sidebar.title("Filter Lokasi")
     filtered_df = df.copy()
-    filter_hierarchy = ["Propinsi", "Kota", "Kanwil", "Nama KC Induk"]
+    filter_hierarchy = ["Propinsi", "Kota", "Kanwil", "Kantor Type"]
 
     for col in filter_hierarchy:
         if col in filtered_df.columns:
