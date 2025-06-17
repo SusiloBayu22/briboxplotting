@@ -212,7 +212,7 @@ if uploaded_file is not None:
 
     # === Legenda Peta ===
     legend_colors = {
-        "KC": "pblue", "KCP": "pink", "KFO": "green"
+        "KC": "blue", "KCP": "pink", "KFO": "green"
     }
     legend_items = "".join([
         f"<div style='display: flex; align-items: center; margin-bottom: 4px;'>"
