@@ -101,7 +101,7 @@ if uploaded_file is not None:
     # === Sidebar Filters - Cascading ===
     st.sidebar.title("Filter Lokasi")
     filtered_df = df.copy()
-    filter_hierarchy = ["Propinsi", "Kota", "Kanwil", "Kantor Type"]
+    filter_hierarchy = ["Wilayah", "Region", "Lokasi pengiriman"]
 
     for col in filter_hierarchy:
         if col in filtered_df.columns:
@@ -212,8 +212,7 @@ if uploaded_file is not None:
 
     # === Legenda Peta ===
     legend_colors = {
-        "KC": "blue", "KCP": "pink", "KFO": "green"
-    }
+        "Perwakilan": "red", "Lokasi": "blue"}
     legend_items = "".join([
         f"<div style='display: flex; align-items: center; margin-bottom: 4px;'>"
         f"<div style='width: 12px; height: 12px; border-radius: 50%; background: {c}; {'border:1px solid #ccc;' if c == 'white' else ''} margin-right: 6px;'></div> {l}</div>"
