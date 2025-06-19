@@ -212,7 +212,7 @@ if uploaded_file is not None:
 
     # === Legenda Peta ===
     legend_colors = {
-        "Perwakilan": "red", "Lokasi": "blue"}
+        "KC": "blue", "KCP": "pink", "KFO": "red"}
     legend_items = "".join([
         f"<div style='display: flex; align-items: center; margin-bottom: 4px;'>"
         f"<div style='width: 12px; height: 12px; border-radius: 50%; background: {c}; {'border:1px solid #ccc;' if c == 'white' else ''} margin-right: 6px;'></div> {l}</div>"
