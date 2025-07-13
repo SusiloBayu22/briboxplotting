@@ -114,6 +114,23 @@ if uploaded_file is not None:
         st.warning("Tidak ada data setelah filter diterapkan.")
         st.stop()
 
+        # === Filter Tambahan Dinamis ===
+    st.sidebar.markdown("### Filter Tambahan (Opsional)")
+    additional_filter_columns = [
+        col for col in filtered_df.columns
+        if col not in filter_hierarchy + ["Latitude", "Longitude", "NamaTitik"]
+    ]
+    selected_additional_filters = st.sidebar.multiselect(
+        "Pilih Kolom Untuk Ditambahkan sebagai Filter", additional_filter_columns)
+
+    for col in selected_additional_filters:
+        unique_vals = sorted(filtered_df[col].dropna().unique())
+        selected_vals = st.sidebar.multiselect(
+            f"Filter Nilai untuk {col}", ["Pilih Semua"] + unique_vals, default=["Pilih Semua"])
+        if "Pilih Semua" not in selected_vals:
+            filtered_df = filtered_df[filtered_df[col].isin(selected_vals)]
+
+
     # === Sidebar Warna ===
     st.sidebar.markdown("---")
     st.sidebar.subheader("Pilih Warna Untuk Titik Tertentu")
