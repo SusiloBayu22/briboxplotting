@@ -71,7 +71,11 @@ if uploaded_json is not None:
     if st.sidebar.button("Load Pengaturan JSON"):
         progress = json.load(uploaded_json)
         df = pd.DataFrame(progress["data"])
-        st.session_state.kcp_custom_colors = progress.get("kcp_custom_colors", {})
+
+        # Pastikan semua key warna menjadi string agar konsisten (JSON bisa mengubah tipe key)
+        st.session_state.kcp_custom_colors = {
+            str(k): v for k, v in progress.get("kcp_custom_colors", {}).items()
+        }
         st.session_state.enable_cluster = progress.get("enable_cluster", False)
         for i in range(1, 4):
             st.session_state[f"radius_{i}_enabled"] = progress.get(f"radius_{i}_enabled", False)
@@ -114,7 +118,7 @@ if uploaded_file is not None:
         st.warning("Tidak ada data setelah filter diterapkan.")
         st.stop()
 
-        # === Filter Tambahan Dinamis ===
+    # === Filter Tambahan Dinamis ===
     st.sidebar.markdown("### Filter Tambahan (Opsional)")
     additional_filter_columns = [
         col for col in filtered_df.columns
@@ -130,19 +134,23 @@ if uploaded_file is not None:
         if "Pilih Semua" not in selected_vals:
             filtered_df = filtered_df[filtered_df[col].isin(selected_vals)]
 
-
     # === Sidebar Warna ===
     st.sidebar.markdown("---")
     st.sidebar.subheader("Pilih Warna Untuk Titik Tertentu")
     warna_column = st.sidebar.selectbox("Pilih Kolom Referensi Warna", df.columns, index=None)
+
     if warna_column:
-        name_list = sorted(df[warna_column].dropna().unique())
+        # Standarkan ke string agar aman saat sorted() dan sebagai key dict
+        name_list = sorted(
+            pd.Series(df[warna_column].dropna().astype(str)).unique(),
+            key=lambda s: s.lower()
+        )
         selected_names = st.sidebar.multiselect("Pilih Nilai dari Kolom Warna", name_list)
         color_choice = st.sidebar.selectbox("Pilih Warna", available_folium_colors)
         if selected_names:
             if st.sidebar.button("Tandai Nilai dengan Warna Ini"):
                 for val in selected_names:
-                    st.session_state.kcp_custom_colors[val] = color_choice
+                    st.session_state.kcp_custom_colors[str(val)] = color_choice
 
     if st.sidebar.button("Reset Semua Warna"):
         st.session_state.kcp_custom_colors = {}
@@ -165,6 +173,7 @@ if uploaded_file is not None:
     st.sidebar.markdown("---")
     progress = {
         "data": df.to_dict(orient="records"),
+        # kcp_custom_colors sudah ber-key string dari proses assign
         "kcp_custom_colors": st.session_state.kcp_custom_colors,
         "enable_cluster": st.session_state.enable_cluster,
     }
@@ -190,11 +199,17 @@ if uploaded_file is not None:
     for _, row in filtered_df.iterrows():
         lat, lon = row["Latitude"], row["Longitude"]
         warna = "blue"
+
         ref_value = row.get(warna_column)
-        if ref_value in st.session_state.kcp_custom_colors:
-            warna = st.session_state.kcp_custom_colors[ref_value]
-        elif "Warna" in row and pd.notna(row["Warna"]):
-            warna = row["Warna"]
+        key_str = None
+        if ref_value is not None and not pd.isna(ref_value):
+            key_str = str(ref_value)
+
+        if key_str in st.session_state.kcp_custom_colors:
+            warna = st.session_state.kcp_custom_colors[key_str]
+        elif ("Warna" in filtered_df.columns) and pd.notna(row.get("Warna")):
+            # Jika file punya kolom 'Warna' manual, hormati itu
+            warna = str(row.get("Warna"))
 
         marker = folium.Marker(
             location=[lat, lon],
@@ -228,11 +243,15 @@ if uploaded_file is not None:
         marker_group.add_to(m)
 
     # === Legenda Peta ===
-    legend_colors = {
-        "KC": "blue", "KCP": "pink", "KFO": "red"}
+    legend_colors = {"KC": "blue", "KCP": "pink", "KFO": "red"}
     legend_items = "".join([
-        f"<div style='display: flex; align-items: center; margin-bottom: 4px;'>"
-        f"<div style='width: 12px; height: 12px; border-radius: 50%; background: {c}; {'border:1px solid #ccc;' if c == 'white' else ''} margin-right: 6px;'></div> {l}</div>"
+        (
+            "<div style='display: flex; align-items: center; margin-bottom: 4px;'>"
+            f"<div style='width: 12px; height: 12px; border-radius: 50%; "
+            f"background: {c}; "
+            f"{'border:1px solid #ccc; ' if c == 'white' else ''}"
+            f"margin-right: 6px;'></div> {l}</div>"
+        )
         for l, c in legend_colors.items()
     ])
     legend_html = f"""
@@ -248,19 +267,26 @@ if uploaded_file is not None:
 
     # === Export Data ===
     df_export = filtered_df.copy()
+
     def get_final_color(row):
         ref_val = row.get(warna_column)
-        if ref_val in st.session_state.kcp_custom_colors:
-            return st.session_state.kcp_custom_colors[ref_val]
-        elif "Warna" in row and pd.notna(row["Warna"]):
-            return row["Warna"]
+        key_str = None
+        if ref_val is not None and not pd.isna(ref_val):
+            key_str = str(ref_val)
+
+        if key_str in st.session_state.kcp_custom_colors:
+            return st.session_state.kcp_custom_colors[key_str]
+        elif ("Warna" in filtered_df.columns) and pd.notna(row.get("Warna")):
+            return str(row.get("Warna"))
         return "blue"
 
     df_export["Warna_Akhir"] = df_export.apply(get_final_color, axis=1)
     buffer = BytesIO()
     df_export.to_excel(buffer, index=False, engine='openpyxl')
     buffer.seek(0)
-    st.download_button("Download Seluruh Data (Excel)", data=buffer, file_name="seluruh_data_dengan_warna.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    st.download_button("Download Seluruh Data (Excel)", data=buffer,
+                       file_name="seluruh_data_dengan_warna.xlsx",
+                       mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 else:
     st.info("Silakan upload file Excel untuk memulai.")
