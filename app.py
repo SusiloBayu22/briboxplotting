@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 import folium
 from streamlit_folium import st_folium
 from folium import plugins
@@ -24,6 +25,59 @@ def load_data(file):
     df = pd.read_excel(file)
     df.columns = df.columns.str.strip()
     return df
+
+# === Helpers untuk normalisasi tampilan nilai (angka & campur tipe) ===
+def normalize_display(v):
+    """Kembalikan string display yang stabil untuk angka & non-angka.
+       - 1 dan 1.0 -> '1'
+       - 1.50 -> '1.5'
+       - selain angka -> str(v)
+    """
+    # Tangani NaN awal
+    try:
+        if pd.isna(v):
+            return None
+    except TypeError:
+        pass
+
+    # Jika sudah numeric (int/float/numpy numeric)
+    if isinstance(v, (int, float, np.integer, np.floating)):
+        f = float(v)
+        if np.isfinite(f):
+            if f.is_integer():
+                return str(int(f))
+            else:
+                s = ('%f' % f).rstrip('0').rstrip('.')
+                return s
+        else:
+            return str(v)
+
+    # Jika string yang terlihat angka, coba parse hati-hati
+    if isinstance(v, str):
+        s = v.strip()
+        if s == "":
+            return s
+        try:
+            f = float(s)
+            if np.isfinite(f):
+                if f.is_integer():
+                    return str(int(f))
+                else:
+                    return ('%f' % f).rstrip('0').rstrip('.')
+        except Exception:
+            pass
+        return s
+    return str(v)
+
+def build_display_map(series: pd.Series):
+    """Buat peta: display_string -> list[nilai_asli], untuk handle 1 vs 1.0."""
+    display_map = {}
+    for v in pd.unique(series.dropna()):
+        key = normalize_display(v)
+        if key is None:
+            continue
+        display_map.setdefault(key, []).append(v)
+    return display_map
 
 # === Initialize Session States ===
 def init_session_state():
@@ -72,7 +126,7 @@ if uploaded_json is not None:
         progress = json.load(uploaded_json)
         df = pd.DataFrame(progress["data"])
 
-        # Pastikan semua key warna menjadi string agar konsisten (JSON bisa mengubah tipe key)
+        # Pastikan semua key warna menjadi string agar konsisten
         st.session_state.kcp_custom_colors = {
             str(k): v for k, v in progress.get("kcp_custom_colors", {}).items()
         }
@@ -102,37 +156,51 @@ if uploaded_file is not None:
     df["Longitude"] = pd.to_numeric(df["Longitude"], errors="coerce")
     df.dropna(subset=["Latitude", "Longitude"], inplace=True)
 
-    # === Sidebar Filters - Cascading ===
+    # === Sidebar Filters - Cascading (robust untuk angka) ===
     st.sidebar.title("Filter Lokasi")
     filtered_df = df.copy()
     filter_hierarchy = ["Propinsi", "Kota", "Kanwil"]
 
     for col in filter_hierarchy:
         if col in filtered_df.columns:
-            unique_vals = sorted(filtered_df[col].dropna().unique())
-            multiselect_vals = st.sidebar.multiselect(f"Pilih {col}", ["Pilih Semua"] + unique_vals, default=["Pilih Semua"])
-            if "Pilih Semua" not in multiselect_vals:
-                filtered_df = filtered_df[filtered_df[col].isin(multiselect_vals)]
+            disp_map = build_display_map(filtered_df[col])
+            options = ["Pilih Semua"] + sorted(disp_map.keys(), key=str.lower)
+            selected_displays = st.sidebar.multiselect(f"Pilih {col}", options, default=["Pilih Semua"])
+            if "Pilih Semua" not in selected_displays:
+                # Kembalikan ke nilai asli lalu filter
+                selected_originals = []
+                for disp in selected_displays:
+                    selected_originals.extend(disp_map.get(disp, []))
+                filtered_df = filtered_df[filtered_df[col].isin(selected_originals)]
 
     if filtered_df.empty:
         st.warning("Tidak ada data setelah filter diterapkan.")
         st.stop()
 
-    # === Filter Tambahan Dinamis ===
+    # === Filter Tambahan Dinamis (robust untuk angka & campur tipe) ===
     st.sidebar.markdown("### Filter Tambahan (Opsional)")
     additional_filter_columns = [
         col for col in filtered_df.columns
         if col not in filter_hierarchy + ["Latitude", "Longitude", "NamaTitik"]
     ]
     selected_additional_filters = st.sidebar.multiselect(
-        "Pilih Kolom Untuk Ditambahkan sebagai Filter", additional_filter_columns)
+        "Pilih Kolom Untuk Ditambahkan sebagai Filter", additional_filter_columns
+    )
 
     for col in selected_additional_filters:
-        unique_vals = sorted(filtered_df[col].dropna().unique())
-        selected_vals = st.sidebar.multiselect(
-            f"Filter Nilai untuk {col}", ["Pilih Semua"] + unique_vals, default=["Pilih Semua"])
-        if "Pilih Semua" not in selected_vals:
-            filtered_df = filtered_df[filtered_df[col].isin(selected_vals)]
+        disp_map = build_display_map(filtered_df[col])
+        options = ["Pilih Semua"] + sorted(disp_map.keys(), key=str.lower)
+        selected_displays = st.sidebar.multiselect(
+            f"Filter Nilai untuk {col}", options, default=["Pilih Semua"]
+        )
+        if "Pilih Semua" not in selected_displays:
+            selected_originals = []
+            for disp in selected_displays:
+                selected_originals.extend(disp_map.get(disp, []))
+            filtered_df = filtered_df[filtered_df[col].isin(selected_originals)]
+            if filtered_df.empty:
+                st.warning(f"Tidak ada data setelah filter '{col}' diterapkan.")
+                st.stop()
 
     # === Sidebar Warna ===
     st.sidebar.markdown("---")
@@ -142,15 +210,16 @@ if uploaded_file is not None:
     if warna_column:
         # Standarkan ke string agar aman saat sorted() dan sebagai key dict
         name_list = sorted(
-            pd.Series(df[warna_column].dropna().astype(str)).unique(),
+            pd.Series(df[warna_column].dropna().map(normalize_display)).dropna().unique(),
             key=lambda s: s.lower()
         )
         selected_names = st.sidebar.multiselect("Pilih Nilai dari Kolom Warna", name_list)
         color_choice = st.sidebar.selectbox("Pilih Warna", available_folium_colors)
         if selected_names:
             if st.sidebar.button("Tandai Nilai dengan Warna Ini"):
-                for val in selected_names:
-                    st.session_state.kcp_custom_colors[str(val)] = color_choice
+                # simpan key sebagai string tampilan (stabil) -> warna
+                for disp in selected_names:
+                    st.session_state.kcp_custom_colors[str(disp)] = color_choice
 
     if st.sidebar.button("Reset Semua Warna"):
         st.session_state.kcp_custom_colors = {}
@@ -167,13 +236,16 @@ if uploaded_file is not None:
                 st.selectbox(f"Warna Target Titik #{i}", available_folium_colors, key=f"radius_{i}_target")
 
     st.sidebar.markdown("---")
-    st.session_state.enable_cluster = st.sidebar.checkbox("Aktifkan Cluster Marker", value=st.session_state.enable_cluster)
+    st.session_state.enable_cluster = st.sidebar.checkbox(
+        "Aktifkan Cluster Marker",
+        value=st.session_state.enable_cluster
+    )
 
     # === Save Progress ===
     st.sidebar.markdown("---")
     progress = {
         "data": df.to_dict(orient="records"),
-        # kcp_custom_colors sudah ber-key string dari proses assign
+        # kcp_custom_colors berisi key string display -> warna
         "kcp_custom_colors": st.session_state.kcp_custom_colors,
         "enable_cluster": st.session_state.enable_cluster,
     }
@@ -185,7 +257,9 @@ if uploaded_file is not None:
             f"radius_{i}_target": st.session_state.get(f"radius_{i}_target", "blue"),
         })
     json_bytes = json.dumps(progress, default=serialize_time).encode("utf-8")
-    st.sidebar.download_button("Simpan Progress (JSON)", data=json_bytes, file_name="saved_progress.json", mime="application/json")
+    st.sidebar.download_button("Simpan Progress (JSON)", data=json_bytes,
+                               file_name="saved_progress.json",
+                               mime="application/json")
 
     # === Main Map ===
     lat_center = filtered_df["Latitude"].mean()
@@ -200,13 +274,14 @@ if uploaded_file is not None:
         lat, lon = row["Latitude"], row["Longitude"]
         warna = "blue"
 
+        # Ambil nilai referensi & normalisasi display agar match dengan key di kcp_custom_colors
         ref_value = row.get(warna_column)
-        key_str = None
+        disp_key = None
         if ref_value is not None and not pd.isna(ref_value):
-            key_str = str(ref_value)
+            disp_key = normalize_display(ref_value)
 
-        if key_str in st.session_state.kcp_custom_colors:
-            warna = st.session_state.kcp_custom_colors[key_str]
+        if disp_key in st.session_state.kcp_custom_colors:
+            warna = st.session_state.kcp_custom_colors[disp_key]
         elif ("Warna" in filtered_df.columns) and pd.notna(row.get("Warna")):
             # Jika file punya kolom 'Warna' manual, hormati itu
             warna = str(row.get("Warna"))
@@ -270,12 +345,12 @@ if uploaded_file is not None:
 
     def get_final_color(row):
         ref_val = row.get(warna_column)
-        key_str = None
+        disp_key = None
         if ref_val is not None and not pd.isna(ref_val):
-            key_str = str(ref_val)
+            disp_key = normalize_display(ref_val)
 
-        if key_str in st.session_state.kcp_custom_colors:
-            return st.session_state.kcp_custom_colors[key_str]
+        if disp_key in st.session_state.kcp_custom_colors:
+            return st.session_state.kcp_custom_colors[disp_key]
         elif ("Warna" in filtered_df.columns) and pd.notna(row.get("Warna")):
             return str(row.get("Warna"))
         return "blue"
