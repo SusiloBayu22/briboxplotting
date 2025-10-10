@@ -40,7 +40,6 @@ def normalize_display(v):
     except TypeError:
         pass
 
-    # Jika sudah numeric (int/float/numpy numeric)
     if isinstance(v, (int, float, np.integer, np.floating)):
         f = float(v)
         if np.isfinite(f):
@@ -52,7 +51,6 @@ def normalize_display(v):
         else:
             return str(v)
 
-    # Jika string yang terlihat angka, coba parse hati-hati
     if isinstance(v, str):
         s = v.strip()
         if s == "":
@@ -125,8 +123,6 @@ if uploaded_json is not None:
     if st.sidebar.button("Load Pengaturan JSON"):
         progress = json.load(uploaded_json)
         df = pd.DataFrame(progress["data"])
-
-        # Pastikan semua key warna menjadi string agar konsisten
         st.session_state.kcp_custom_colors = {
             str(k): v for k, v in progress.get("kcp_custom_colors", {}).items()
         }
@@ -151,10 +147,37 @@ if uploaded_file is not None:
         st.warning("Silakan pilih ketiga kolom terlebih dahulu.")
         st.stop()
 
+    # --- Rename kolom utama ---
     df = df.rename(columns={col_lat: "Latitude", col_lon: "Longitude", name_column: "NamaTitik"})
-    df["Latitude"] = pd.to_numeric(df["Latitude"], errors="coerce")
+
+    # --- SANITASI & VALIDASI LAT/LON (BARU) ---
+    # 1) Ganti koma menjadi titik untuk angka desimal yang ditulis dengan koma
+    df["Latitude"]  = df["Latitude"].astype(str).str.replace(",", ".", regex=False)
+    df["Longitude"] = df["Longitude"].astype(str).str.replace(",", ".", regex=False)
+
+    # 2) Konversi ke numerik (yang gagal -> NaN)
+    df["Latitude"]  = pd.to_numeric(df["Latitude"], errors="coerce")
     df["Longitude"] = pd.to_numeric(df["Longitude"], errors="coerce")
-    df.dropna(subset=["Latitude", "Longitude"], inplace=True)
+
+    # 3) Buat mask valid (finite & dalam rentang dunia nyata)
+    mask_valid = (
+        pd.notna(df["Latitude"]) & pd.notna(df["Longitude"]) &
+        np.isfinite(df["Latitude"]) & np.isfinite(df["Longitude"]) &
+        df["Latitude"].between(-90, 90, inclusive="both") &
+        df["Longitude"].between(-180, 180, inclusive="both")
+    )
+
+    invalid_count = int((~mask_valid).sum())
+    df = df[mask_valid].copy()
+
+    # 4) Tampilkan notifikasi toast di kanan-atas bila ada titik invalid
+    if invalid_count > 0:
+        # st.toast auto-dismiss ~5 detik; tampil di kanan-atas
+        st.toast(f"{invalid_count} titik tidak bisa ditampilkan karena eror", icon="⚠️")
+
+    if df.empty:
+        st.error("Semua titik tidak valid. Periksa kembali format Latitude/Longitude (gunakan titik desimal).")
+        st.stop()
 
     # === Sidebar Filters - Cascading (robust untuk angka) ===
     st.sidebar.title("Filter Lokasi")
@@ -167,7 +190,6 @@ if uploaded_file is not None:
             options = ["Pilih Semua"] + sorted(disp_map.keys(), key=str.lower)
             selected_displays = st.sidebar.multiselect(f"Pilih {col}", options, default=["Pilih Semua"])
             if "Pilih Semua" not in selected_displays:
-                # Kembalikan ke nilai asli lalu filter
                 selected_originals = []
                 for disp in selected_displays:
                     selected_originals.extend(disp_map.get(disp, []))
@@ -208,7 +230,6 @@ if uploaded_file is not None:
     warna_column = st.sidebar.selectbox("Pilih Kolom Referensi Warna", df.columns, index=None)
 
     if warna_column:
-        # Standarkan ke string agar aman saat sorted() dan sebagai key dict
         name_list = sorted(
             pd.Series(df[warna_column].dropna().map(normalize_display)).dropna().unique(),
             key=lambda s: s.lower()
@@ -217,7 +238,6 @@ if uploaded_file is not None:
         color_choice = st.sidebar.selectbox("Pilih Warna", available_folium_colors)
         if selected_names:
             if st.sidebar.button("Tandai Nilai dengan Warna Ini"):
-                # simpan key sebagai string tampilan (stabil) -> warna
                 for disp in selected_names:
                     st.session_state.kcp_custom_colors[str(disp)] = color_choice
 
@@ -245,7 +265,6 @@ if uploaded_file is not None:
     st.sidebar.markdown("---")
     progress = {
         "data": df.to_dict(orient="records"),
-        # kcp_custom_colors berisi key string display -> warna
         "kcp_custom_colors": st.session_state.kcp_custom_colors,
         "enable_cluster": st.session_state.enable_cluster,
     }
@@ -274,7 +293,6 @@ if uploaded_file is not None:
         lat, lon = row["Latitude"], row["Longitude"]
         warna = "blue"
 
-        # Ambil nilai referensi & normalisasi display agar match dengan key di kcp_custom_colors
         ref_value = row.get(warna_column)
         disp_key = None
         if ref_value is not None and not pd.isna(ref_value):
@@ -283,7 +301,6 @@ if uploaded_file is not None:
         if disp_key in st.session_state.kcp_custom_colors:
             warna = st.session_state.kcp_custom_colors[disp_key]
         elif ("Warna" in filtered_df.columns) and pd.notna(row.get("Warna")):
-            # Jika file punya kolom 'Warna' manual, hormati itu
             warna = str(row.get("Warna"))
 
         marker = folium.Marker(
