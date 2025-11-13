@@ -335,7 +335,7 @@ if uploaded_file is not None:
         marker_group.add_to(m)
 
     # === Legenda Peta ===
-    legend_colors = {"KC": "blue", "KCP": "pink", "KFO": "red"}
+    legend_colors = {"KC": "blue", "KCP": "pink", "KFO": "red", "Outlet": "green", "MKK": "orange"}
     legend_items = "".join([
         (
             "<div style='display: flex; align-items: center; margin-bottom: 4px;'>"
