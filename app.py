@@ -107,7 +107,18 @@ def init_session_state():
     defaults = {
         "kcp_custom_colors": {},
         "enable_cluster": False,
-        "legend_column": "(Tidak ada)"
+        "legend_column": "(Tidak ada)",
+
+        # --- Resume helpers (auto-restore last session) ---
+        "col_lat_saved": None,
+        "col_lon_saved": None,
+        "name_column_saved": None,
+        "warna_column_saved": None,
+
+        # filter state
+        "filter_selections": {},               # {"Propinsi": [...], "Kota": [...], ...}
+        "additional_filter_cols_saved": [],    # [colA, colB, ...]
+        "additional_filter_values": {}         # {"colA": [...], ...}
     }
     for i in range(1, 4):
         defaults.update({
@@ -128,6 +139,25 @@ available_folium_colors = [
     "beige", "darkblue", "darkgreen", "cadetblue", "darkpurple",
     "white", "pink", "lightblue", "lightgreen", "gray", "black", "lightgray"
 ]
+
+
+# === Normalisasi warna folium (handle typo / case) ===
+COLOR_ALIASES = {
+    "darkklue": "darkblue",
+    "darkblu": "darkblue",
+    "darkbue": "darkblue",
+    "lightgren": "lightgreen",
+    "ligtgreen": "lightgreen",
+    "purpel": "purple",
+}
+
+def normalize_folium_color(c):
+    if c is None:
+        return None
+    s = str(c).strip().lower()
+    if s in COLOR_ALIASES:
+        s = COLOR_ALIASES[s]
+    return s
 
 # ================= LOAD from JSON (backward compatible) =================
 st.sidebar.markdown("---")
@@ -150,6 +180,15 @@ if uploaded_json is not None:
         }
         st.session_state.enable_cluster = settings.get("enable_cluster", False)
         st.session_state.legend_column = settings.get("legend_column", "(Tidak ada)")
+        # restore last UI selections (optional)
+        st.session_state.col_lat_saved = settings.get("col_lat_saved")
+        st.session_state.col_lon_saved = settings.get("col_lon_saved")
+        st.session_state.name_column_saved = settings.get("name_column_saved")
+        st.session_state.warna_column_saved = settings.get("warna_column_saved")
+
+        st.session_state.filter_selections = settings.get("filter_selections", {})
+        st.session_state.additional_filter_cols_saved = settings.get("additional_filter_cols_saved", [])
+        st.session_state.additional_filter_values = settings.get("additional_filter_values", {})
 
         radius_cfg = settings.get("radius", {})
         for i in range(1, 4):
@@ -174,9 +213,25 @@ else:
 
 # ================= Pilih Kolom Latitude/Longitude/Nama =================
 st.subheader("Pilih Kolom Latitude, Longitude, dan Nama Titik")
-col_lat = st.selectbox("Pilih Kolom Latitude", df.columns, index=None)
-col_lon = st.selectbox("Pilih Kolom Longitude", df.columns, index=None)
-name_column = st.selectbox("Pilih Kolom Nama Titik", df.columns, index=None)
+# auto-select jika pernah disimpan dari JSON / session sebelumnya
+def _idx_or_none(cols, value):
+    try:
+        return list(cols).index(value) if value in list(cols) else None
+    except Exception:
+        return None
+
+col_lat_default = _idx_or_none(df.columns, st.session_state.get("col_lat_saved"))
+col_lon_default = _idx_or_none(df.columns, st.session_state.get("col_lon_saved"))
+name_col_default = _idx_or_none(df.columns, st.session_state.get("name_column_saved"))
+
+col_lat = st.selectbox("Pilih Kolom Latitude", df.columns, index=col_lat_default)
+col_lon = st.selectbox("Pilih Kolom Longitude", df.columns, index=col_lon_default)
+name_column = st.selectbox("Pilih Kolom Nama Titik", df.columns, index=name_col_default)
+
+# simpan pilihan
+st.session_state.col_lat_saved = col_lat
+st.session_state.col_lon_saved = col_lon
+st.session_state.name_column_saved = name_column
 
 if not col_lat or not col_lon or not name_column:
     st.warning("Silakan pilih ketiga kolom terlebih dahulu.")
@@ -215,7 +270,22 @@ for col in filter_hierarchy:
     if col in filtered_df.columns:
         disp_map = build_display_map(filtered_df[col])
         options = ["Pilih Semua"] + sorted(disp_map.keys(), key=str.lower)
-        selected_displays = st.sidebar.multiselect(f"Pilih {col}", options, default=["Pilih Semua"])
+        # restore default selection jika ada
+        _saved = st.session_state.get("filter_selections", {}).get(col, ["Pilih Semua"])
+        # pastikan hanya option yang valid
+        _saved = [v for v in _saved if v in options]
+        if not _saved:
+            _saved = ["Pilih Semua"]
+
+        selected_displays = st.sidebar.multiselect(
+            f"Pilih {col}",
+            options,
+            default=_saved,
+            key=f"filter_{col}"
+        )
+        # simpan pilihan untuk resume
+        st.session_state.filter_selections[col] = selected_displays
+
         if "Pilih Semua" not in selected_displays:
             selected_originals = []
             for disp in selected_displays:
@@ -232,16 +302,36 @@ additional_filter_columns = [
     col for col in filtered_df.columns
     if col not in filter_hierarchy + ["Latitude", "Longitude", "NamaTitik"]
 ]
+# restore kolom tambahan terakhir (jika ada)
+_saved_cols = st.session_state.get("additional_filter_cols_saved", [])
+_saved_cols = [c for c in _saved_cols if c in additional_filter_columns]
+
 selected_additional_filters = st.sidebar.multiselect(
-    "Pilih Kolom Untuk Ditambahkan sebagai Filter", additional_filter_columns
+    "Pilih Kolom Untuk Ditambahkan sebagai Filter",
+    additional_filter_columns,
+    default=_saved_cols,
+    key="additional_filter_cols"
 )
+st.session_state.additional_filter_cols_saved = selected_additional_filters
 
 for col in selected_additional_filters:
     disp_map = build_display_map(filtered_df[col])
     options = ["Pilih Semua"] + sorted(disp_map.keys(), key=str.lower)
+    # restore default selection untuk filter tambahan
+    _saved_vals = st.session_state.get("additional_filter_values", {}).get(col, ["Pilih Semua"])
+    _saved_vals = [v for v in _saved_vals if v in options]
+    if not _saved_vals:
+        _saved_vals = ["Pilih Semua"]
+
     selected_displays = st.sidebar.multiselect(
-        f"Filter Nilai untuk {col}", options, default=["Pilih Semua"]
+        f"Filter Nilai untuk {col}",
+        options,
+        default=_saved_vals,
+        key=f"additional_filter_{col}"
     )
+    # simpan untuk resume
+    st.session_state.additional_filter_values[col] = selected_displays
+
     if "Pilih Semua" not in selected_displays:
         selected_originals = []
         for disp in selected_displays:
@@ -254,7 +344,9 @@ for col in selected_additional_filters:
 # === Sidebar Warna ===
 st.sidebar.markdown("---")
 st.sidebar.subheader("Pilih Warna Untuk Titik Tertentu")
-warna_column = st.sidebar.selectbox("Pilih Kolom Referensi Warna", df.columns, index=None)
+warna_default = _idx_or_none(df.columns, st.session_state.get("warna_column_saved"))
+warna_column = st.sidebar.selectbox("Pilih Kolom Referensi Warna", df.columns, index=warna_default)
+st.session_state.warna_column_saved = warna_column
 
 if warna_column:
     name_list = sorted(
@@ -312,6 +404,15 @@ progress = {
         "kcp_custom_colors": st.session_state.kcp_custom_colors,
         "enable_cluster": st.session_state.enable_cluster,
         "legend_column": st.session_state.get("legend_column", "(Tidak ada)"),
+        # resume state
+        "col_lat_saved": st.session_state.get("col_lat_saved"),
+        "col_lon_saved": st.session_state.get("col_lon_saved"),
+        "name_column_saved": st.session_state.get("name_column_saved"),
+        "warna_column_saved": st.session_state.get("warna_column_saved"),
+        "filter_selections": st.session_state.get("filter_selections", {}),
+        "additional_filter_cols_saved": st.session_state.get("additional_filter_cols_saved", []),
+        "additional_filter_values": st.session_state.get("additional_filter_values", {}),
+
         "radius": {
             i: {
                 "enabled": st.session_state.get(f"radius_{i}_enabled", False),
@@ -350,36 +451,51 @@ marker_cluster = plugins.MarkerCluster() if st.session_state.enable_cluster else
 
 # Helper: resolve warna marker sesuai aturan asli (custom -> kolom "Warna" -> default blue)
 def resolve_marker_color(row):
+    """Tentukan warna marker secara konsisten.
+    Prioritas:
+    1) Custom mapping (berdasarkan warna_column yang dipilih)
+    2) Kolom Warna_Akhir (jika ada & tidak kosong)
+    3) Kolom Warna (jika ada & tidak kosong)
+    4) Default 'blue'
+    """
+    # default
     warna = "blue"
-    ref_value = row.get(warna_column)
+
+    # 1) custom mapping (opsional, hanya jika warna_column dipilih)
+    try:
+        ref_value = row.get(warna_column) if warna_column else None
+    except Exception:
+        ref_value = None
+
     disp_key = None
     if ref_value is not None and not pd.isna(ref_value):
         disp_key = normalize_display(ref_value)
 
-    if disp_key in st.session_state.kcp_custom_colors:
-        warna = st.session_state.kcp_custom_colors[disp_key]
-    elif ("Warna" in filtered_df.columns) and pd.notna(row.get("Warna")):
-        warna = str(row.get("Warna"))
-    return warna
+    if disp_key and disp_key in st.session_state.kcp_custom_colors:
+        return normalize_folium_color(st.session_state.kcp_custom_colors[disp_key])
+
+    # 2) prefer Warna_Akhir jika tersedia (mis. hasil export sebelumnya)
+    if "Warna_Akhir" in row.index and pd.notna(row.get("Warna_Akhir")):
+        warna_akhir = str(row.get("Warna_Akhir")).strip()
+        if warna_akhir:
+            return normalize_folium_color(warna_akhir)
+
+    # 3) fallback Warna
+    if "Warna" in row.index and pd.notna(row.get("Warna")):
+        warna_col = str(row.get("Warna")).strip()
+        if warna_col:
+            return normalize_folium_color(warna_col)
+
+    return normalize_folium_color(warna)
 
 for _, row in df_map.iterrows():
     lat, lon = row["Latitude"], row["Longitude"]
-    warna = "blue"
-
-    ref_value = row.get(warna_column)
-    disp_key = None
-    if ref_value is not None and not pd.isna(ref_value):
-        disp_key = normalize_display(ref_value)
-
-    if disp_key in st.session_state.kcp_custom_colors:
-        warna = st.session_state.kcp_custom_colors[disp_key]
-    elif ("Warna" in df_map.columns) and pd.notna(row.get("Warna")):
-        warna = str(row.get("Warna"))
+    warna = resolve_marker_color(row)
 
     marker = folium.Marker(
         location=[lat, lon],
         popup=row.get("NamaTitik", ""),
-        icon=folium.Icon(color=warna if warna in available_folium_colors else "blue", icon="info-sign")
+        icon=folium.Icon(color=normalize_folium_color(warna) if normalize_folium_color(warna) in available_folium_colors else "blue", icon="info-sign")
     )
 
     if st.session_state.enable_cluster:
