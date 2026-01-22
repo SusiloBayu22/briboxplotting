@@ -26,7 +26,7 @@ def load_data(file):
     df.columns = df.columns.str.strip()
     return df
 
-# ================= SERIALIZER JSON SAFE (BARU) =================
+# ================= JSON SAFE SERIALIZER =================
 def json_safe(obj):
     if isinstance(obj, (np.integer,)):
         return int(obj)
@@ -108,7 +108,7 @@ available_folium_colors = [
     "white", "pink", "lightblue", "lightgreen", "gray", "black", "lightgray"
 ]
 
-# ================= LOAD JSON (REFACTORED) =================
+# ================= LOAD JSON =================
 st.sidebar.markdown("---")
 st.sidebar.markdown("### Lanjutkan dari JSON")
 uploaded_json = st.sidebar.file_uploader("Upload file JSON", type="json")
@@ -116,7 +116,6 @@ uploaded_json = st.sidebar.file_uploader("Upload file JSON", type="json")
 if uploaded_json and st.sidebar.button("Load Pengaturan JSON"):
     progress = json.load(uploaded_json)
 
-    # Backward compatible
     if "settings" in progress:
         settings = progress["settings"]
         df = pd.DataFrame(progress.get("data", []))
@@ -155,15 +154,29 @@ col_name = st.selectbox("Nama Titik", df.columns)
 
 df = df.rename(columns={col_lat: "Latitude", col_lon: "Longitude", col_name: "NamaTitik"})
 
-df["Latitude"] = pd.to_numeric(df["Latitude"].astype(str).str.replace(",", "."), errors="coerce")
-df["Longitude"] = pd.to_numeric(df["Longitude"].astype(str).str.replace(",", "."), errors="coerce")
+# ================= SANITASI TANPA HAPUS DATA =================
+df["Latitude"] = pd.to_numeric(
+    df["Latitude"].astype(str).str.replace(",", ".", regex=False),
+    errors="coerce"
+)
+df["Longitude"] = pd.to_numeric(
+    df["Longitude"].astype(str).str.replace(",", ".", regex=False),
+    errors="coerce"
+)
 
-df = df[
+# ================= DATA KHUSUS MAP (VALID SAJA) =================
+df_map = df[
+    pd.notna(df["Latitude"]) &
+    pd.notna(df["Longitude"]) &
     df["Latitude"].between(-90, 90) &
     df["Longitude"].between(-180, 180)
 ].copy()
 
-# ================= SAVE JSON (REFACTORED) =================
+invalid_count = len(df) - len(df_map)
+if invalid_count > 0:
+    st.toast(f"{invalid_count} titik dilewati karena koordinat tidak valid", icon="⚠️")
+
+# ================= SAVE JSON =================
 st.sidebar.markdown("---")
 st.sidebar.subheader("Simpan Progress")
 
@@ -197,14 +210,16 @@ st.sidebar.download_button(
 )
 
 # ================= MAP =================
-m = folium.Map(
-    location=[df["Latitude"].mean(), df["Longitude"].mean()],
-    zoom_start=6
-)
+if not df_map.empty:
+    center_lat = df_map["Latitude"].mean()
+    center_lon = df_map["Longitude"].mean()
+else:
+    center_lat, center_lon = -2.5489, 118.0149  # fallback Indonesia
 
+m = folium.Map(location=[center_lat, center_lon], zoom_start=6)
 plugins.MarkerCluster().add_to(m)
 
-for _, row in df.iterrows():
+for _, row in df_map.iterrows():
     color = st.session_state.kcp_custom_colors.get(
         normalize_display(row.get("Warna")), "blue"
     )
